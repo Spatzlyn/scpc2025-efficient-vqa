@@ -28,12 +28,14 @@ The [technical report](docs/technical-report.md) explains the design choices, th
 
 ## Results
 
-| Stage | Parameters | Public weighted accuracy |
-|---|---:|---:|
-| Original InstructBLIP-Flan-T5-XL | 4,022,969,088 | Not reported |
-| Structured pruning | 2,978,586,976 | 82.83% |
-| Knowledge distillation | Same pruned architecture | 85.73% |
-| LoRA fine-tuning: final submission | 2,986,746,208 | 86.59% |
+| Stage | Parameters | A-OKVQA validation accuracy (1,000 examples) | Public weighted accuracy |
+|---|---:|---:|---:|
+| Original InstructBLIP-Flan-T5-XL | 4,022,969,088 | 79.00% | — |
+| Structured pruning | 2,978,586,976 | 76.60% | 82.83% |
+| Knowledge distillation | Same pruned architecture | — | 85.73% |
+| LoRA fine-tuning: final submission | 2,986,746,208 | — | 86.59% |
+
+Pruning reduced local A-OKVQA validation accuracy by 2.40 percentage points (79.00% to 76.60%). The validation and public leaderboard columns refer to different evaluation settings and must be compared within their own columns. A dash means the consulted records do not supply a value for that particular metric and stage; the original model's validation accuracy is reported above.
 
 The final solution improves the reported score by 3.76 percentage points over the pruned stage while remaining below 3B parameters, including the added adapters. These are historical competition results, not new measurements for this documentation release. The sequence describes cumulative stages; it does not isolate each component's causal effect.
 

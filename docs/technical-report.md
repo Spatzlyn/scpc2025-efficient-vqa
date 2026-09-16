@@ -48,6 +48,8 @@ The final removal set was [1, 3, 4, 8, 10, 11, 12, 14, 17, 21, 24, 25, 26]. This
 
 Together, the pruning stages produced a model with 2,978,586,976 parameters. On the reported 1,000-example A-OKVQA validation subset, accuracy decreased from 79.00% to 76.60%. The pruned model's separate public competition score was 82.83%.
 
+The pruned architecture is approximately 25.96% smaller than the original; after adding adapters, the final model is approximately 25.76% smaller. These two reductions refer to different stages. The result tables use exact archived counts, while overview text rounds the final reduction to 25.8%.
+
 <!-- pagebreak -->
 
 ## 3. Distillation and LoRA Fine-Tuning
@@ -108,18 +110,18 @@ These subsets served different purposes and can overlap; their sizes should not 
 
 ### 4.2 Stage-wise results
 
-| Stage | Parameter count | Public weighted accuracy |
-|---|---:|---:|
-| Original model | 4,022,969,088 | Not reported |
-| Structured pruning | 2,978,586,976 | 82.83% |
-| Knowledge distillation | Same pruned architecture | 85.73% |
-| Final model with LoRA | 2,986,746,208 | 86.59% |
+| Stage | Parameter count | A-OKVQA validation accuracy | Public weighted accuracy |
+|---|---:|---:|---:|
+| Original model | 4,022,969,088 | 79.00% | — |
+| Structured pruning | 2,978,586,976 | 76.60% | 82.83% |
+| Knowledge distillation | Same pruned architecture | — | 85.73% |
+| Final model with LoRA | 2,986,746,208 | — | 86.59% |
+
+The validation column uses 1,000 A-OKVQA examples: pruning decreases accuracy by 2.40 percentage points. A dash indicates that the consulted records supply no value for that metric and stage. Comparisons must remain within the same evaluation column.
 
 ![Parameter counts and public scores](../assets/results-summary.png)
 
-Figure 2. Parameter counts and public leaderboard scores are shown on separate axes. No public score is assigned to the over-budget original model. The model-size panel uses a zero baseline; the score panel also spans 0-100%.
-
-The pruned architecture is approximately 25.96% smaller than the original; after adding adapters, the final model is approximately 25.76% smaller. These two reductions refer to different stages. The result tables use exact archived counts, while overview text rounds the final reduction to 25.8%.
+Figure 2. Parameter counts and public leaderboard scores are plotted separately; the annotation also records the local A-OKVQA baseline comparison. Both plotted axes start at zero. The original model's 79.00% validation accuracy is not a public leaderboard score.
 
 <!-- pagebreak -->
 

@@ -20,12 +20,15 @@ These tables transcribe aggregate numerical results from Yookyung Youn's archive
 
 ## Derived Quantities
 
+The pre-pruning baseline was evaluated: its A-OKVQA validation accuracy was 79.00% on 1,000 examples. The corresponding pruned-model accuracy was 76.60%, a decrease of 2.40 percentage points. The blank public-score cell for the original model does not mean that its validation accuracy was unreported.
+
 | Quantity | Calculation | Rounded value |
 |---|---|---:|
 | Pruned-model parameter reduction | 100 × (4,022,969,088 − 2,978,586,976) / 4,022,969,088 | 25.96% |
 | Final-model parameter reduction | 100 × (4,022,969,088 − 2,986,746,208) / 4,022,969,088 | 25.76% |
 | Added adapter parameters | 2,986,746,208 − 2,978,586,976 | 8,159,232 |
 | Final margin below 3B | 3,000,000,000 − 2,986,746,208 | 13,253,792 |
+| Local validation accuracy change after pruning | 76.60 − 79.00 | −2.40 percentage points |
 | Score gain after KD | 85.73 − 82.83 | 2.90 percentage points |
 | Further score gain after LoRA | 86.59 − 85.73 | 0.86 percentage points |
 | Overall gain over pruning | 86.59 − 82.83 | 3.76 percentage points |
