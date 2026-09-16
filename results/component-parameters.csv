@@ -1,0 +1,3 @@
+component,original_parameters,pruned_parameters
+decoder_ffn,754974720,37748736
+decoder_attention,805306368,478150656

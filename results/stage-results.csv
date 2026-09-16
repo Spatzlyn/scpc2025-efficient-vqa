@@ -1,0 +1,5 @@
+stage,parameter_count,public_weighted_accuracy_percent,aokvqa_validation_accuracy_percent,aokvqa_validation_sample_count,count_basis
+original,4022969088,,79.00,1000,archived count
+structured_pruning,2978586976,82.83,76.60,1000,archived count
+knowledge_distillation,,85.73,,,same pruned architecture; separate post-KD count not reported
+final_lora,2986746208,86.59,,,archived count including adapters
