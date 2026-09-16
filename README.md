@@ -10,7 +10,7 @@ Yookyung Youn · Korea University · Individual participant
 
 This project addresses multiple-choice visual question answering under a strict inference budget of fewer than 3 billion parameters. Starting from the task and competition constraints, I independently developed the solution: selecting the model and training data, designing the compression strategy, implementing training and inference, evaluating alternatives, and preparing the final submission.
 
-I selected InstructBLIP-Flan-T5-XL and combined structured decoder pruning, teacher-student knowledge distillation, and LoRA fine-tuning. The final model contains approximately 2.987B parameters, a 25.8% reduction from the 4.023B original. Its reported public leaderboard weighted accuracy is 86.59%.
+I selected InstructBLIP-Flan-T5-XL and combined neuron-level structured pruning of decoder feed-forward networks (FFNs), head-level structured pruning of decoder attention, teacher-student knowledge distillation, and LoRA fine-tuning. The final model contains approximately 2.987B parameters, a 25.8% reduction from the 4.023B original. Its reported public leaderboard weighted accuracy is 86.59%.
 
 This repository presents the technical report, newly drawn figures, and aggregate experimental results.
 
@@ -21,10 +21,12 @@ This repository presents the technical report, newly drawn figures, and aggregat
 | Decision | Implementation and supporting investigation |
 |---|---|
 | Preserve a capable pretrained starting point | Select an instruction-following vision-language model and compress its decoder. |
-| Allocate compression across components | Use activation-aware FFN importance and attention-head similarity; assess removal choices through masking and approximately 60 head-removal configurations. |
+| Allocate compression across components | Rank FFN neurons with a Wanda-inspired activation/weight score and select whole attention heads using similarity analysis; assess removal choices through masking and approximately 60 head-removal configurations. |
 | Improve the compressed model | Distill from the original model, then fine-tune query/value adapters using a balanced mixture of previously correct and incorrect training examples. |
 
-The [technical report](docs/technical-report.md) explains the design choices, their implementation, and the evaluation conditions. The contribution is the independently designed and implemented competition solution, building on the pretrained models and methods cited in the report.
+FFN pruning removes intermediate neurons and their associated input/output weights, reducing the FFN intermediate widths. Attention pruning removes whole heads from decoder self-attention and cross-attention, reducing the internal projection widths. Both operations rebuild smaller dense layers. The FFN importance score is inspired by Wanda's use of weights and activations; this implementation prunes neuron groups rather than individual weight elements. The earlier neuron-masking experiments evaluated candidate removals before structural compaction.
+
+The [technical report](docs/technical-report.md) specifies the importance score, removal units, and evaluation conditions. The contribution is the independently designed and implemented competition solution, building on the pretrained models and methods cited in the report.
 
 ## Results
 

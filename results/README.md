@@ -9,6 +9,12 @@ These tables transcribe aggregate numerical results from Yookyung Youn's archive
 | [stage-results.csv](stage-results.csv) | Whole-model parameter counts, public leaderboard weighted accuracy, and the separately reported A-OKVQA comparison |
 | [component-parameters.csv](component-parameters.csv) | Recorded decoder FFN and decoder attention counts before and after pruning |
 
+## Pruning Terminology
+
+The `structured_pruning` stage combines two operations: neuron-level structured pruning of decoder FFNs and head-level structured pruning of decoder self-attention and cross-attention. Both remove groups of connected weights and rebuild smaller dense matrices.
+
+FFN neurons are ranked globally across decoder layers using a Wanda-inspired score: mean absolute gated activation multiplied by the L2 norm of the neuron's output-projection column. The 95% removal rate applies to the aggregate decoder FFN neurons and their associated parameters; retained widths vary by layer. Earlier column-masking experiments evaluate neuron removal without changing matrix dimensions. The final structural implementation removes the corresponding rows of both FFN input projections and columns of the output projection. Attention pruning removes whole heads and their associated projection dimensions.
+
 ## Units and Missing Values
 
 - Parameter counts are integer numbers of parameters; 1B means 1,000,000,000 parameters.

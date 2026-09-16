@@ -6,7 +6,7 @@ Technical report | SCPC 2025 AI Challenge, 1st Place | Documentation edition: Se
 
 ## Abstract
 
-The SCPC 2025 AI Challenge required a multimodal model for multiple-choice visual question answering with fewer than three billion parameters used at inference. I independently designed and implemented a solution based on structural compression of InstructBLIP-Flan-T5-XL. The method combines activation-aware pruning of decoder feed-forward networks, similarity-guided attention-head removal, teacher-student knowledge distillation, and LoRA fine-tuning on a balanced mixture of previously correct and incorrect examples. The final model contains 2,986,746,208 parameters, approximately 25.8% fewer than the original model. Reported public leaderboard weighted accuracy increased from 82.83% after pruning to 85.73% after distillation and 86.59% after LoRA. This report describes the decisions and experimental evidence behind the solution, which received first place in the AI Challenge. The numerical results are reconstructed from my archived competition records; they have not been remeasured for this documentation release.
+The SCPC 2025 AI Challenge required a multimodal model for multiple-choice visual question answering with fewer than three billion parameters used at inference. I independently designed and implemented a solution based on structural compression of InstructBLIP-Flan-T5-XL. The method combines activation-aware neuron-level structured pruning of decoder feed-forward networks (FFNs), similarity-guided head-level structured pruning of decoder attention, teacher-student knowledge distillation, and LoRA fine-tuning on a balanced mixture of previously correct and incorrect examples. The final model contains 2,986,746,208 parameters, approximately 25.8% fewer than the original model. Reported public leaderboard weighted accuracy increased from 82.83% after pruning to 85.73% after distillation and 86.59% after LoRA. This report describes the decisions and experimental evidence behind the solution, which received first place in the AI Challenge. The numerical results are reconstructed from my archived competition records; they have not been remeasured for this documentation release.
 
 ## 1. Problem and Individual Contribution
 
@@ -18,7 +18,7 @@ The solution builds on existing models and methods [3-7]. My contribution is the
 
 ![Method overview](../assets/method-overview.png)
 
-Figure 1. The original model supplies both the starting weights and the training-time teacher. The deployed model is the compressed student with LoRA adapters; the teacher is not part of final inference.
+Figure 1. Structured pruning removes FFN intermediate neurons and whole decoder attention heads. The original model supplies the starting weights and the training-time teacher. Final inference uses the compressed student with LoRA adapters.
 
 <!-- pagebreak -->
 
@@ -28,27 +28,27 @@ Figure 1. The original model supplies both the starting weights and the training
 
 I compared candidate vision-language models using the task format and a 1,000-example A-OKVQA validation subset. The selected InstructBLIP-Flan-T5-XL model [3] achieved a reported 79.00% accuracy on that subset before compression. Its recorded parameter count was 4,022,969,088, which exceeded the competition budget.
 
-The development record emphasizes instruction following and compatibility between pretrained components. I chose to compress an existing model rather than replace or combine major components, which would have introduced an additional alignment and training problem. This was a design choice for the available setting, not evidence that component replacement is generally ineffective. Exact identities and configurations for every alternative are not included in this release, so the report does not claim an exhaustive model comparison.
+The development record emphasizes instruction following and compatibility between pretrained components. Compressing a pretrained model preserved its existing component alignment. This choice reflects the available setting; the archived alternatives are insufficient for an exhaustive model comparison or a general claim against component replacement.
 
-### 2.2 Activation-aware FFN pruning
+### 2.2 Neuron-level structured pruning of decoder FFNs
 
-The decoder has 24 layers. Each original feed-forward network has an intermediate width of 5,120 and a model-facing width of 2,048. I used a Wanda-inspired importance criterion [5] combining neuron activation information with outgoing weight magnitude, then ranked intermediate neurons to allocate removal across layers. The archived importance analysis used 250 examples from the A-OKVQA validation split.
+The decoder has 24 gated FFNs, each initially with intermediate width 5,120 and input/output width 2,048. For each intermediate neuron, the importance score multiplies its mean absolute gated activation by the L2 norm of the corresponding output-projection column. The archived code collects activations during generation on the first 250 A-OKVQA training examples. This neuron-group criterion is inspired by Wanda's weight/activation principle [5]; its aggregation and removal unit differ from Wanda's individual-weight criterion.
 
-The structural change reduced each affected FFN's intermediate dimension while preserving the model-facing input and output width. Layer-specific retained widths were determined by the selected neurons. This is a structured adaptation motivated by Wanda's activation-aware principle, rather than a claim to reproduce the original unstructured pruning procedure exactly.
+I globally ranked neurons across decoder layers and selected the lowest-scoring 95% for removal. Candidate experiments masked entire columns of `wo`. The final implementation physically removes the corresponding rows of both gated input projections (`wi_0`, `wi_1`) and columns of `wo`, rebuilding smaller dense layers. This is neuron-level structured pruning: intermediate widths shrink, while the input/output width remains 2,048. Retained widths vary by layer; 95% is the aggregate removal rate, not a fixed per-layer rate.
 
-The final recorded decoder FFN count decreased from 754,974,720 to 37,748,736 parameters, a 95% reduction for that component. That percentage does not describe pruning of the entire model.
+The recorded decoder FFN parameter count decreased from 754,974,720 to 37,748,736, a 95% reduction for that component, not for the whole model.
 
-Hidden-state masking experiments supported the selection process. The development record describes activation-norm analysis, clustering, and masking candidate groups before committing to structural removal. A larger masking comparison used 2,000 A-OKVQA training examples. These diagnostics helped assess sensitivity within the development setting; they do not constitute a broad robustness evaluation.
+Separate hidden-state masking experiments used activation-norm analysis and clustering to assess sensitivity. A larger comparison used 2,000 A-OKVQA training examples. These were development diagnostics; they do not imply that hidden-state dimension pruning was part of the final architecture.
 
-### 2.3 Similarity-guided attention-head removal
+### 2.3 Head-level structured pruning of decoder attention
 
 I analyzed attention-head similarity on 500 A-OKVQA training examples, used a greedy procedure to identify candidate removals, and evaluated approximately 60 removal configurations on a 100-example validation subset. Similarity provided a search heuristic; task performance determined which candidate configuration to retain.
 
-The final removal set was [1, 3, 4, 8, 10, 11, 12, 14, 17, 21, 24, 25, 26]. This reduced the targeted decoder attention modules from 32 to 19 heads. With 64 dimensions per head, the internal attention width changed from 2,048 to 1,216. The implementation adjusted internal dimensions to make the reduced projections and head reshaping consistent. The recorded decoder attention count decreased from 805,306,368 to 478,150,656 parameters.
+The same zero-based head indices [1, 3, 4, 8, 10, 11, 12, 14, 17, 21, 24, 25, 26] were removed from decoder self-attention and cross-attention in all 24 layers. Each module retained 19 of 32 heads. The implementation removes the associated rows of the query/key/value projections and columns of the output projection, then updates head counts and internal dimensions. At 64 dimensions per head, internal width shrinks from 2,048 to 1,216 while input/output widths stay fixed. The recorded decoder attention count decreased from 805,306,368 to 478,150,656 parameters.
 
 Together, the pruning stages produced a model with 2,978,586,976 parameters. On the reported 1,000-example A-OKVQA validation subset, accuracy decreased from 79.00% to 76.60%. The pruned model's separate public competition score was 82.83%.
 
-The pruned architecture is approximately 25.96% smaller than the original; after adding adapters, the final model is approximately 25.76% smaller. These two reductions refer to different stages. The result tables use exact archived counts, while overview text rounds the final reduction to 25.8%.
+Pruning reduces the whole-model parameter count by 25.96%; adding adapters yields a final reduction of 25.76%, rounded to 25.8% in overview text. Tables retain the exact archived counts.
 
 <!-- pagebreak -->
 
@@ -99,7 +99,7 @@ Development experiments used subsets of A-OKVQA [4]. Their local accuracy measur
 | Experiment | Dataset and recorded size | Interpretation |
 |---|---|---|
 | Base/pruned comparison | A-OKVQA validation; 1,000 examples | Local task-performance comparison |
-| FFN importance collection | A-OKVQA validation; 250 examples | Development/calibration signal |
+| FFN importance collection | A-OKVQA train; first 250 examples | Neuron-importance calibration |
 | Larger masking comparison | A-OKVQA train; 2,000 examples | Sensitivity diagnostic |
 | Head-similarity analysis | A-OKVQA train; 500 examples | Candidate-generation signal |
 | Head-removal search | A-OKVQA validation; 100 examples | Approximately 60 configurations |
@@ -153,6 +153,6 @@ This repository contains this report, newly drawn figures, and aggregate result 
 2. Samsung Research. [Samsung Electronics Unveils Winners of the 11th Samsung Collegiate Programming Challenge](https://research.samsung.com/news/Samsung-Electronics-Unveils-Winners-of-11th-Collegiate-Programming-Challenge-as-Part-of-AI-Talent-Discovery-Initiative). Official award announcement, 2025.
 3. Dai et al. [InstructBLIP: Towards General-purpose Vision-Language Models with Instruction Tuning](https://arxiv.org/abs/2305.06500), 2023. [Selected model](https://huggingface.co/Salesforce/instructblip-flan-t5-xl).
 4. Schwenk et al. [A-OKVQA: A Benchmark for Visual Question Answering using World Knowledge](https://arxiv.org/abs/2206.01718), 2022. [Dataset repository](https://github.com/allenai/aokvqa).
-5. Sun et al. [A Simple and Effective Pruning Approach for Large Language Models](https://arxiv.org/abs/2306.11695), 2023.
+5. Sun et al. [A Simple and Effective Pruning Approach for Large Language Models](https://arxiv.org/abs/2306.11695), ICLR 2024.
 6. Hinton, Vinyals, and Dean. [Distilling the Knowledge in a Neural Network](https://arxiv.org/abs/1503.02531), 2015.
 7. Hu et al. [LoRA: Low-Rank Adaptation of Large Language Models](https://arxiv.org/abs/2106.09685), 2021.
