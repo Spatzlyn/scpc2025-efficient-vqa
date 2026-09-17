@@ -10,23 +10,37 @@ Yookyung Youn · Korea University · Individual participant
 
 This project addresses multiple-choice visual question answering under a strict inference budget of fewer than 3 billion parameters. Starting from the task and competition constraints, I independently developed the solution: selecting the model and training data, designing the compression strategy, implementing training and inference, evaluating alternatives, and preparing the final submission.
 
+As an undergraduate working with personally funded, on-demand GPUs, I concentrated the development into approximately two to three weeks around end-of-semester commitments. I selected experiments by what they could resolve about the next design decision: which components tolerated intervention, which removal combinations preserved task behavior, and when additional training stopped transferring to the competition setting. The [technical report](docs/technical-report.md) reconstructs that process in detail.
+
 I selected InstructBLIP-Flan-T5-XL and combined neuron-level structured pruning of decoder feed-forward networks (FFNs), head-level structured pruning of decoder attention, teacher-student knowledge distillation, and LoRA fine-tuning. The final model contains approximately 2.987B parameters, a 25.8% reduction from the 4.023B original. Its reported public leaderboard weighted accuracy is 86.59%.
 
 This repository presents the technical report, newly drawn figures, and aggregate experimental results.
 
-## Approach
+## Design Rationale
+
+The final pipeline emerged through revisions to the initial plan. The report follows the questions, hypotheses, observations, and decisions behind those revisions.
+
+| Question | Reasoning and resulting decision |
+|---|---|
+| Which model could I compress and meaningfully investigate? | InstructBLIP's component structure let me examine interventions separately. I accepted a larger initial parameter count to preserve existing alignment and make the compression problem more tractable. |
+| Where should I spend the compression budget? | I hypothesized that upstream representation damage and disruption of the visual-language interface could be costly. Recalled encoder trials showed severe losses, directing further investigation toward decoder components. |
+| Was low activation enough to identify expendable computation? | Irregular masking results challenged that assumption. I refined activation clusters and evaluated removal combinations conditionally, using a greedy search rather than trusting magnitude alone. |
+| Which explored interventions still justified their cost? | Hidden-state masking offered limited extra benefit once FFN compression supplied substantial savings. I excluded it from the final structure and used FFN neuron and attention-head removal. |
+| How should the pruned model recover? | I treated KD as stabilization and selected the original unpruned model as teacher. The goal was to restore useful behavior in the compressed architecture before further adaptation. |
+| How could the remaining parameter allowance improve performance? | I implemented LoRA wrappers for the changed projection dimensions, froze the backbone, and mixed previously correct and incorrect examples to balance preservation and correction. |
+| What did a strong final score fail to capture? | I observed poorer language generation despite retained answer-selection ability. This qualitative limitation motivated my interest in evaluation beyond task accuracy and in trustworthy AI. |
+
+The rationale is reconstructed from my recollection alongside archived implementation and results. The report labels qualitative comparisons whose complete numerical records have not been recovered. It also distinguishes the methods used during the competition from literature consulted afterward, including my adaptation of Wanda's activation-and-weight principle. The contribution is the independently developed solution and its experimental decision process.
+
+## Final Method
 
 ![Solution design: model selection, structured pruning, teacher-guided stabilization, and balanced-data LoRA fine-tuning](assets/method-overview.png)
 
-| Decision | Implementation and supporting investigation |
-|---|---|
-| Preserve a capable pretrained starting point | Select an instruction-following vision-language model and compress its decoder. |
-| Allocate compression across components | Rank FFN neurons with a Wanda-inspired activation/weight score and select whole attention heads using similarity analysis; assess removal choices through masking and approximately 60 head-removal configurations. |
-| Improve the compressed model | Distill from the original model, then fine-tune query/value adapters using a balanced mixture of previously correct and incorrect training examples. |
-
 FFN pruning removes intermediate neurons and their associated input/output weights, reducing the FFN intermediate widths. Attention pruning removes whole heads from decoder self-attention and cross-attention, reducing the internal projection widths. Both operations rebuild smaller dense layers. The FFN importance score is inspired by Wanda's use of weights and activations; this implementation prunes neuron groups rather than individual weight elements. The earlier neuron-masking experiments evaluated candidate removals before structural compaction.
 
-The [technical report](docs/technical-report.md) specifies the importance score, removal units, and evaluation conditions. The contribution is the independently designed and implemented competition solution, building on the pretrained models and methods cited in the report.
+The FFN criterion combines mean absolute gated activation with the L2 norm of the output-projection column. The selected 95% removal applies to decoder FFN neurons in aggregate, with different retained widths per layer. Head candidates use cosine similarity of original-model attention maps and task evaluation. The final system does not include the exploratory hidden-state masking.
+
+Teacher-student stabilization uses output-distribution supervision and target answers. Custom query/value LoRA adapters then add 8,159,232 parameters, with the backbone frozen and a 1:1 mixture of previously correct and incorrect A-OKVQA training examples. The [report](docs/technical-report.md) provides the implementation details and distinguishes retained settings from exploratory trials.
 
 ## Results
 
@@ -49,12 +63,14 @@ The first-place award and the public leaderboard score are distinct outcomes. Sa
 
 | Path | Contents |
 |---|---|
-| [docs/technical-report.md](docs/technical-report.md) | Detailed report: problem, design, method, experiments, results, limitations, and references |
+| [docs/technical-report.md](docs/technical-report.md) | Detailed decision process, hypotheses, design revisions, implementation, evidence, limitations, and references |
 | [docs/technical-report.pdf](docs/technical-report.pdf) | Downloadable version of the report |
 | [assets/](assets/) | Original overview diagram and result plots in PNG and SVG |
 | [results/](results/) | Aggregate CSV tables and notes on units, provenance, and interpretation |
 
 ## Materials and Scope
+
+The report documents the historical 2025 solution within the model-eligibility and compute constraints of that period. Its references distinguish existing methods, retrospectively connected work available before the competition, and research published afterward. Independent problem solving is not presented as a claim to have originated those methods.
 
 The public release documents the solution and its reported evidence. Implementation notebooks, model weights, raw datasets, and competition presentation files are not included. This release therefore does not provide an executable reproduction package. The figures were newly drawn for this repository; they are not slide screenshots.
 

@@ -2,6 +2,8 @@
 
 These tables transcribe aggregate numerical results from Yookyung Youn's archived 2025 competition records. No new training or inference was run to create this documentation release. The original presentation and private working files are not distributed. See the [technical report](../docs/technical-report.md) for methods, development-subset sizes, and limitations.
 
+The expanded report also records the author's retrospective design rationale and qualitative recollections. Those accounts do not add new measured rows to these tables. In particular, alternative-teacher, sampling-ratio, extended-training, and language-generation comparisons are not assigned numerical values without recovered measurements.
+
 ## Files
 
 | File | Contents |
@@ -40,5 +42,7 @@ The pre-pruning baseline was evaluated: its A-OKVQA validation accuracy was 79.0
 | Overall gain over pruning | 86.59 − 82.83 | 3.76 percentage points |
 
 The A-OKVQA accuracies were reported on a 1,000-example validation subset. They are local, unweighted development results and must not be mixed with the competition's public weighted accuracy. No public competition score is assigned to the original, over-budget model.
+
+The final KD notebook separately holds out 10% of the A-OKVQA training split for checkpoint selection by cross-entropy. That internal holdout is not the official validation set used in the stage table and is not guaranteed to remain held out from subsequent LoRA training. Other small competition diagnostics are also distinct from the table's A-OKVQA measurements. Public feedback informed development, so it should not be described as an untouched generalization test.
 
 These are cumulative stages, not isolated ablations. No confidence intervals, repeated-seed statistics, or inference-speed improvements are claimed. The final award is independently documented in [Samsung's announcement](https://research.samsung.com/news/Samsung-Electronics-Unveils-Winners-of-11th-Collegiate-Programming-Challenge-as-Part-of-AI-Talent-Discovery-Initiative); it is distinct from the public leaderboard score.
