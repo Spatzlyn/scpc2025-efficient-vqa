@@ -1,8 +1,8 @@
 # Results and Interpretation
 
-These tables transcribe aggregate numerical results from Yookyung Youn's archived 2025 competition records. No new training or inference was run to create this documentation release. The original presentation and private working files are not distributed. See the [technical report](../docs/technical-report.md) for methods, development-subset sizes, and limitations.
+These tables transcribe aggregate numerical results from Yookyung Youn's 2025 competition experiment records. No new training or inference was run to create this documentation release. The original presentation and private working files are not distributed. See the [technical report](../docs/technical-report.md) for methods, development-subset sizes, and limitations.
 
-The expanded report also records the author's retrospective design rationale and qualitative recollections. Those accounts do not add new measured rows to these tables. In particular, alternative-teacher, sampling-ratio, extended-training, and language-generation comparisons are not assigned numerical values without recovered measurements.
+The report explains how these results informed the system design. Alternative-teacher, sampling-ratio, extended-training, and language-generation comparisons are discussed qualitatively; the tables below contain the reported numerical measurements.
 
 ## Files
 

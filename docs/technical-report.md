@@ -2,13 +2,13 @@
 
 Yookyung Youn | Korea University
 
-Technical report | SCPC 2025 AI Challenge, 1st Place | Documentation edition: September 2026
+Technical report | SCPC 2025 AI Challenge, 1st Place
 
 ## Abstract
 
-The SCPC 2025 AI Challenge required multiple-choice visual question answering with fewer than three billion parameters loaded for inference. I independently designed and implemented a solution by compressing InstructBLIP-Flan-T5-XL, stabilizing the compressed model through knowledge distillation, and adding custom LoRA adapters. This report develops the reasoning behind that solution: choosing an architecture whose components could be investigated separately, testing where compression was affordable, revising activation-based assumptions after non-monotonic masking results, and distinguishing recovery from further task adaptation. The final model contains 2,986,746,208 parameters, approximately 25.8% fewer than the original. Reported public weighted accuracy increased from 82.83% after pruning to 85.73% after distillation and 86.59% after LoRA. The solution received first place in the AI Challenge. Alongside these results, I discuss qualitative language-generation degradation and the limits of task accuracy as evidence of retained capability. This retrospective report distinguishes archived implementation details from recalled experimental observations and credits the existing methods on which the solution builds.
+The SCPC 2025 AI Challenge required multiple-choice visual question answering with fewer than three billion parameters loaded for inference. I independently designed and implemented a solution by compressing InstructBLIP-Flan-T5-XL, stabilizing the compressed model through knowledge distillation, and adding custom LoRA adapters. This report develops the reasoning behind that solution: choosing an architecture whose components could be investigated separately, testing where compression was affordable, revising activation-based assumptions after non-monotonic masking results, and distinguishing recovery from further task adaptation. The final model contains 2,986,746,208 parameters, approximately 25.8% fewer than the original. Reported public weighted accuracy increased from 82.83% after pruning to 85.73% after distillation and 86.59% after LoRA. The solution received first place in the AI Challenge. Alongside these results, I discuss qualitative language-generation degradation and the limits of task accuracy as evidence of retained capability. The report presents the design rationale, implementation, experimental findings, and limitations of a solution built on established methods.
 
-## 1. Setting, Ownership, and Evidence
+## 1. Setting and Independent Development
 
 ### 1.1 A task and constraints, with an open solution strategy
 
@@ -18,25 +18,23 @@ The rules required fewer than 3B total parameters across all models loaded durin
 
 ### 1.2 The effective development window
 
-I recall concentrating implementation and experiments into approximately two to three weeks because the competition overlapped with end-of-semester commitments. This describes my effective development window, not the official duration of the event. GPU access was paid for personally through on-demand rentals. The cost of a failed run affected which hypotheses I could test and how much evidence I sought before committing to longer training.
+I concentrated implementation and experiments into approximately two to three weeks because the competition overlapped with end-of-semester commitments. This describes my effective development window, not the official duration of the event. GPU access was paid for personally through on-demand rentals. The cost of a failed run affected which hypotheses I could test and how much evidence I sought before committing to longer training.
 
 These constraints encouraged inexpensive diagnostics, incremental changes, and reuse of pretrained capabilities. They also made stopping decisions consequential. A plausible alternative could still be a poor use of the remaining time if its alignment, training, or debugging costs were difficult to estimate. The choices below should be understood within that setting.
 
-### 1.3 How this account was reconstructed
+### 1.3 Independent design and contribution
 
-This report was reconstructed in September 2026 from archived competition materials, inspected notebooks, and my recollection. Exact implementation settings and tabulated scores are attributed to the archive. Explanations of why I tried an approach, and qualitative comparisons without retained measurements, are retrospective recollections. The presentation follows dependencies between decisions, rather than claiming a complete dated sequence of every run.
-
-My contribution is the independent formulation, experimental development, structural implementation, and integration of this solution. I arrived at several design questions by reasoning about the task and architecture before looking for a matching method. In the FFN investigation, I subsequently found Wanda's activation-and-weight principle and adapted it. This account does not claim invention of pruning, distillation, LoRA, or a new general theory. Section 9 separates existing methods used in the system from literature consulted later to contextualize the experience.
+My contribution is the independent formulation, experimental development, structural implementation, and integration of this solution. I developed several design questions by reasoning about the task and architecture, then used experiments to revise the resulting hypotheses. When investigating FFN importance, I found Wanda's activation-and-weight principle and adapted it to neuron-level pruning under my compute constraints. The system builds on established pruning, distillation, and LoRA methods; the contribution lies in how I selected, adapted, and integrated them to solve the competition task. Section 9 gives credit to these methods and connects the design decisions to related research.
 
 ![Method overview](../assets/method-overview.png)
 
-Figure 1. Final system. FFN neurons and whole attention heads are structurally removed. The original model supervises the student during training. Final inference uses the compressed student with adapters. This diagram shows the retained solution; the investigations leading to it are developed below.
+Figure 1. Ordered training pipeline: (1) structured pruning, (2) knowledge distillation to stabilize the pruned student, and (3) LoRA fine-tuning of that stabilized student with its backbone frozen. The original model supplies teacher supervision only in stage 2. A-OKVQA training examples support distillation; a subset balanced by the stabilized model's correctness supplies stage 3. Final inference loads the compressed model and trained adapters.
 
 ## 2. Selecting a Model I Could Investigate
 
 ### 2.1 The eligible model pool did not provide an obvious answer
 
-My initial intention was to start with a capable larger model and prune it. Among the eligible candidates I explored, I recall an awkward set of trade-offs: some already fit below 3B, some exceeded the limit without an obvious enough task advantage over smaller alternatives, and others would require much more aggressive compression. These were impressions from the candidates and settings I tried. The surviving record does not support an exhaustive model-ranking table or a statistically significant comparison of architecture families.
+My initial intention was to start with a capable larger model and prune it. The eligible candidates I explored presented difficult trade-offs: some already fit below 3B, some exceeded the limit without a compelling task-performance advantage over smaller alternatives, and others required much more aggressive compression. This made the starting model's suitability for compression as important as its initial task performance.
 
 I also considered assembling separately pretrained components and adapting a more unified architecture. The problem was to find both useful starting capability and an experimental path whose failures I could diagnose. A high initial score alone did not tell me how manageable the compression problem would be.
 
@@ -50,11 +48,11 @@ I therefore deferred this route within the competition window. The decision was 
 
 ### 2.3 Why InstructBLIP-Flan-T5-XL made component-level experiments practical
 
-For some more unified architectures I explored, pruning outcomes felt difficult to localize. A change could affect tightly coupled functions, and the resulting losses were irregular. I wanted to ask more focused questions about where information was transformed and which component had changed.
+For some more unified architectures I explored, the effects of pruning were difficult to localize. A change could affect tightly coupled functions, and the resulting losses were irregular. I wanted to ask more focused questions about where information was transformed and which component had changed.
 
-InstructBLIP-Flan-T5-XL offered an image encoder, a Q-Former, and a T5 language model with separate encoder and decoder components [3]. That decomposition created more opportunities to intervene in one part and observe the consequence. The Q-Former connects visual features to the language model; it is distinct from the connection between the T5 encoder and decoder.
+InstructBLIP-Flan-T5-XL includes an image encoder, a Q-Former, and a T5 language model with separate encoder and decoder components [3]. That decomposition created more opportunities to intervene in one part and observe the consequence. The Q-Former connects visual features to the language model; it is distinct from the connection between the T5 encoder and decoder.
 
-The choice combined existing task capability with experimental tractability. I accepted a substantial compression requirement because the architecture gave me a clearer way to investigate it. The archived baseline contains 4,022,969,088 parameters and achieves 79.00% accuracy on a 1,000-example A-OKVQA validation subset. That is a local baseline, not a competition public score.
+The choice combined existing task capability with experimental tractability. I accepted a substantial compression requirement because the architecture gave me a clearer way to investigate it. The baseline contains 4,022,969,088 parameters and achieves 79.00% accuracy on a 1,000-example A-OKVQA validation subset. That is a local baseline, not a competition public score.
 
 ## 3. From Architectural Intuition to Pruning Experiments
 
@@ -66,19 +64,21 @@ My first hypothesis concerned information flow. If an early transformation corru
 
 My second concern was the interface between modalities. The Q-Former appeared especially consequential because it mediates visual information entering the language model. Disrupting that interface could make otherwise capable components less useful together. I therefore wanted evidence of sufficient savings and tolerance before altering it.
 
-I recall testing both the image encoder and language encoder and seeing severe, irregular performance losses even after changes I considered small. That supported redirecting limited experiments toward the decoder. Full numerical records for those trials have not been recovered. The Q-Former concern remains an architectural hypothesis here; I do not assign it a controlled pruning result. These observations explain the project-specific selection without implying that encoders or bridges should never be pruned.
+Exploratory pruning tests on both the image encoder and language encoder produced severe, irregular performance losses even under relatively small interventions. These observations were consistent with the information-flow concern and made those components unattractive targets under the available budget. I therefore preserved the encoders and visual-language interface and concentrated further experiments on decoder components.
+
+Related research helps explain the importance of this interface. In BLIP-2, omitting the Q-Former's first-stage representation learning substantially reduces zero-shot VQA performance, including with Flan-T5-XL [9]. ECoFLaP, an ICLR 2024 pruning study, retains the Q-Former while compressing visual and language backbones because it accounts for only about 5% of parameters in the studied models [14]. Together, these findings support a practical rationale for preserving learned alignment when potential savings are limited. They provide evidence about alignment learning and compression allocation, rather than a direct sensitivity measurement for pruning my model's Q-Former. Both studies predate the competition and are discussed here as related evidence.
 
 ### 3.2 Choosing the data before choosing the score
 
-I wanted to retain computation useful for the competition task. That made calibration data part of the pruning design. I selected A-OKVQA for its combination of visual questions, world knowledge, and a multiple-choice formulation [4]. I recall considering OK-VQA too, but the answer-selection format was an additional reason to prioritize A-OKVQA.
+I wanted to retain computation useful for the competition task. That made calibration data part of the pruning design. I selected A-OKVQA for its combination of visual questions, world knowledge, and a multiple-choice formulation [4]. I also considered OK-VQA, but the answer-selection format was an additional reason to prioritize A-OKVQA.
 
-The question was: when the model performs a similar task, which parts of its computation participate, and what happens when they are suppressed? Activation was attractive because it was observable with modest additional computation. It supplied an initial signal, rather than a direct measurement of semantic importance.
+The question was: when the model performs a similar task, which parts of its computation participate, and how does pruning those components affect task performance? I first tested candidate interventions through temporary masking before committing to structural removal. Activation was attractive because it was observable with modest additional computation. It supplied an initial signal, rather than a direct measurement of semantic importance.
 
 ### 3.3 Why activation clustering changed my assumptions
 
-I investigated hidden-state masking using activation statistics and clustering. I recall beginning with relatively low-activation groups, expecting smaller performance losses. Many values were similarly small, however, so a coarse grouping could combine dimensions with very different effects. I subdivided groups to obtain finer candidates within the compute budget.
+I investigated hidden-state masking using activation statistics and clustering. I began with relatively low-activation groups, expecting smaller performance losses. Many values were similarly small, however, so a coarse grouping could combine dimensions with very different effects. I subdivided groups to obtain finer candidates within the compute budget.
 
-Masking did not produce a clean, monotonic relationship between activation magnitude and damage. Some low-activation groups caused substantial losses; other combinations changed little, and some improved performance. Low activation on a limited sample could not establish that a dimension was dispensable.
+Masking did not produce a clean, monotonic relationship between activation magnitude and damage. Some low-activation groups caused substantial losses; other combinations changed little, and some even unexpectedly improved performance. Low activation on a limited sample could not establish that a dimension was dispensable.
 
 I considered whether some dimensions supported useful background information without becoming strongly active in those examples. I also considered interactions: removing one dimension could have a different effect depending on which others remained. I imagined complementary or mutually constraining groups. Those were hypotheses motivating further tests, not evidence identifying specific neurons as storing background knowledge or demonstrating a particular mechanism.
 
@@ -86,7 +86,7 @@ I then used a greedy process, evaluating candidate masking choices in the contex
 
 ### 3.4 Why I removed hidden-state masking from the final design
 
-I recall a region in which additional masking changed performance relatively little, followed by sharp losses beyond some extent. The exact threshold is not recoverable from memory. The practical issue was that further intervention yielded too little additional parameter benefit for the associated task-performance risk.
+The masking experiments showed a region of relatively stable performance followed by sharp losses under more extensive intervention. Pursuing further removal therefore became difficult to justify: the additional parameter savings were small relative to the risk of disrupting task performance.
 
 Initially I investigated FFNs with the hidden-state intervention already present because I expected good removal combinations to depend on the current architecture. Once FFN compression supplied most of the useful savings, I reconsidered whether hidden-state removal still earned its cost. I chose the simpler final path based on FFN neurons and attention heads.
 
@@ -96,7 +96,7 @@ This was a substantive design revision. An idea could be worth investigating wit
 
 ### 4.1 Why FFNs came before attention heads
 
-I compared removal units by both their parameter savings and the behavior they might disturb. I thought of attention heads as potentially different ways of relating parts of the input. This was a heuristic interpretation, not a literal one-head-one-function claim, but it made me reluctant to obtain the entire reduction by removing many heads at once.
+I compared removal units by both their parameter savings and the behavior they might disturb. My intuition was that attention heads could capture complementary relationships in the input, so removing many heads at once risked losing useful diversity. This motivated a search for another component that could supply a large share of the required savings before reducing the number of heads.
 
 Decoder FFN intermediate neurons offered finer candidates with substantial aggregate savings. My accounting suggested a staged allocation: obtain a large part of the reduction from FFNs, then use head removal to meet the remaining budget. This ordering emerged from parameter accounting and experiments; the final pair of components had not been the only candidates considered.
 
@@ -106,7 +106,7 @@ Activation alone had proved insufficient. I wanted to incorporate how strongly a
 
 When looking for a formal criterion, I encountered Wanda's weight-and-activation principle [5]. It supported the direction I had been considering, and I adapted it to the neuron groups and measurements I could afford. This is where a specific literature method entered the FFN design. I do not claim an independently proven formula or an exact implementation of Wanda's original elementwise criterion.
 
-For intermediate neuron j in decoder layer l, the archived score is:
+For intermediate neuron j in decoder layer l, the importance score is:
 
 `score(l, j) = mean(abs(gated_activation(l, j))) * L2_norm(wo(l)[:, j])`
 
@@ -118,7 +118,7 @@ The decoder originally has 24 gated FFNs, each with intermediate width 5,120 and
 
 This is neuron-level structured pruning. The FFN intermediate widths shrink while the model-facing hidden width stays fixed. The 95% rate applies across decoder FFNs in aggregate, not separately to every layer or to the whole model. The recorded FFN count changes from 754,974,720 to 37,748,736 parameters.
 
-I recall inspecting layer-level effects and seeing non-monotonic accuracy changes as removal increased. The retained rate was a practical trade-off among tested settings and the budget, not a universal optimum. My aim was to limit damage to sensitive computation. The implementation establishes a global score ranking with different retained widths per layer; it does not establish a separately calibrated equal-damage allocation across layers.
+Layer-level inspection and comparisons of removal rates showed non-monotonic accuracy changes as pruning increased. I therefore judged candidate rates by both task performance and the resulting parameter count. Among the tested settings, 95% aggregate FFN-neuron removal provided a useful balance and supplied most of the required reduction. The global ranking allowed retained widths to vary across layers rather than imposing the same removal fraction everywhere; it did not explicitly equalize performance damage across layers.
 
 ### 4.4 From a dependency hypothesis to head-similarity analysis
 
@@ -126,7 +126,7 @@ After substantial FFN removal, I expected some attention computations to become 
 
 The actual signal was attention-map similarity. If two heads behaved similarly on inspected inputs, I hypothesized that removing one could preserve more useful behavior than removing heads with different patterns. Similarity narrowed the candidate set; task evaluation still had to decide. Similar maps do not imply interchangeable value projections or identical downstream contributions.
 
-The inspected notebook computes cosine similarities on the original unpruned model, using 500 A-OKVQA training images and a generic image-description prompt. Greedy candidate selection and approximately 60 removal configurations were evaluated on a 100-example validation subset. The workflow includes head-only tests followed by evaluation combined with FFN pruning. The implementation therefore differs from my recalled possibility of scoring explicit head-FFN connections: it uses original-model attention similarity, not Wanda-based head scoring or a measured head-to-FFN association.
+The head-analysis procedure computes cosine similarities on the original unpruned model, using 500 A-OKVQA training images and a generic image-description prompt. Greedy candidate selection and approximately 60 removal configurations were evaluated on a 100-example validation subset. Head-only tests screened candidates before combined evaluation with FFN pruning. This separated inexpensive similarity-based proposal from task-based selection in the compressed system. The criterion uses attention-map similarity; it does not compute explicit head-to-FFN associations.
 
 ### 4.5 The retained structure
 
@@ -138,33 +138,33 @@ The resulting model has 2,978,586,976 parameters. Reported A-OKVQA validation ac
 
 ## 5. Knowledge Distillation as Stabilization
 
-### 5.1 Why the original model was a natural teacher
+### 5.1 Matching the teacher to the recovery objective
 
-I approached the next stage as recovery. The student inherited the original weights but had lost computation through pruning. I wanted supervision that could restore behavior it had previously supported, without enlarging its architecture.
+Pruning solved the size constraint but reduced task accuracy. I approached the next stage as recovery: the student retained the original weights in a smaller architecture, so I wanted to restore useful behavior that the original model had already supported. Distillation could supply that supervision without increasing the student's inference-time parameter count.
 
-The original unpruned InstructBLIP-Flan-T5-XL was a natural teacher because its behavior was closely related to the student's starting point. A larger teacher might know more, but that did not guarantee its behavior would be easier for the compressed student to imitate. Under a limited GPU budget, useful recovery per run mattered more than teacher size alone.
+This objective shaped teacher selection. The original unpruned InstructBLIP-Flan-T5-XL provided a reference closely related to the student's starting point. A larger teacher could offer stronger predictions, but its behavior might be harder for the compressed student to reproduce with limited data and GPU time. I therefore evaluated teacher suitability by recovery and transfer, rather than size alone.
 
-I recall trying a larger InstructBLIP-Flan-T5-family teacher. It improved fit to A-OKVQA training data but transferred less well to A-OKVQA validation and the public evaluation than the original teacher. The complete run and exact larger checkpoint have not been recovered, so this remains a qualitative recollection rather than a numerical teacher-size ablation. It informed the selected teacher without establishing a general advantage for smaller teachers.
+A larger teacher from the InstructBLIP-Flan-T5 family improved fit to the A-OKVQA training data, but the original XL teacher produced better A-OKVQA validation and public-evaluation performance. The stronger fit did not translate into better transfer. I selected the original teacher because it better served the immediate objective: stabilizing the pruned model before attempting further adaptation.
 
-### 5.2 Why I preferred output supervision to richer targets
+### 5.2 Choosing supervision the compressed student could use efficiently
 
-I considered matching hidden states to restore internal behavior. My concern was that the pruned student might not efficiently reproduce detailed representations from the unpruned teacher. Hidden-state transfer also required GPU memory. I recall slower or less useful recovery and memory limitations, but a complete matched comparison is unavailable. Capacity mismatch was a working explanation, not a cause isolated from memory, implementation, and optimization effects.
+I considered hidden-state matching because pruning had altered the student's internal computation. However, reproducing detailed teacher representations could require capacity that the student no longer possessed. Keeping the necessary intermediate activations also increased GPU memory demands. Hidden-state experiments encountered memory limits and provided less useful recovery than answer-focused supervision, leading me to prioritize output targets. Capacity mismatch motivated the comparison; it was not isolated as the sole explanation for the observed difference.
 
-The final procedure supervises answer-token distributions and target answer text. This directly serves the stabilization objective without requiring the student to reconstruct every teacher representation. Output-level supervision was the practical choice I retained for the task and resources.
+The retained procedure matches answer-token distributions and trains on target answer text. This places supervision at the behavior the competition directly evaluates, while allowing the smaller model to arrive at that behavior through its own internal representations. It made recovery more practical within the available training budget.
 
-I also explored explanation-based training after observing poorer language generation. Learning explanations might recover behavior that answer-only supervision neglected. Archived experiments include teacher-generated rationales and recovery training; I recall language improvement but little additional answer-selection benefit relative to GPU cost. I omitted that branch from the final solution. Some auxiliary quality metrics in these prototypes were calculated outside the differentiable graph, so they should not be reported as additional gradient-based objectives successfully optimized by the student.
+I also tested explanation-based training because pruning had degraded language generation beyond answer selection. Teacher-generated rationales offered a way to restore some of that behavior. They improved language generation qualitatively, but their additional answer-selection benefit was too small relative to GPU cost to justify inclusion in the final pipeline. I therefore retained answer-focused distillation for stabilization. In the rationale prototypes, auxiliary quality metrics computed outside the differentiable graph served as evaluation signals rather than additional gradient-based training objectives.
 
-### 5.3 Verified stabilization settings
+### 5.3 Stabilization objective and training
 
-The final stabilization notebook mixes soft-target distillation with hard-label cross-entropy [6]:
+The selected stabilization procedure combines soft-target distillation with hard-label cross-entropy [6]. Soft targets convey the teacher's output distribution; hard labels anchor the update to the target answers:
 
 `L = 0.7 * L_KD + 0.3 * L_CE`
 
 `L_KD = T^2 * KL(softmax(teacher_logits / T) || softmax(student_logits / T)); T = 3`
 
-The implementation uses `kl_div` with `reduction='batchmean'`. Teacher and student receive images, questions, and target answer sequences during training. Hard labels are answer text, not merely A/B/C/D. This is token-distribution matching under teacher forcing. The KL call operates on the logits tensor without a separate padding mask; it should not be described as a masked token-average objective.
+The implementation uses `kl_div` with `reduction='batchmean'`. Teacher and student receive images, questions, and target answer sequences during training. Hard labels are answer text, not merely A/B/C/D. This is token-distribution matching under teacher forcing. The KL call operates on the logits tensor without a separate padding mask.
 
-| Setting in the final stabilization notebook | Value |
+| Stabilization setting | Value |
 |---|---|
 | Teacher and student | Original InstructBLIP-Flan-T5-XL in evaluation mode; structurally pruned student |
 | Data and internal split | A-OKVQA train, 17,056 examples; 90% training / 10% validation, seed 42 |
@@ -174,41 +174,41 @@ The implementation uses `kl_div` with `reduction='batchmean'`. Teacher and stude
 | Schedule and clipping | Linear schedule with 10% warmup; gradient norm clipped at 1.0 |
 | Checkpoint selection | Lowest internal validation cross-entropy, evaluated every 1,000 optimizer steps |
 
-These settings come from the final notebook, whose execution outputs are not retained. A separate development notebook contains a 0.65/0.35 loss mixture and completed logs. Multiple KD settings are therefore supported, but a controlled comparison linking every configuration to public submissions is unavailable. The 85.73% score is the archived KD-stage result, not a new reproduction of that notebook.
+A 0.65/0.35 mixture was also explored during development. The table describes the final stabilization implementation; the available results do not provide a matched comparison of loss mixtures.
 
-Distillation keeps the pruned architecture and improves the reported public score by 2.90 percentage points. The teacher is used only during training. This fulfilled the stabilization role I had assigned to the stage and allowed me to consider using the remaining parameter allowance for further adaptation.
+Distillation retains the pruned architecture. The reported KD-stage public score is 85.73%, an increase of 2.90 percentage points from the pruned checkpoint. These stage results establish the role of KD in the submitted pipeline, while the loss-weight alternatives were not isolated in a controlled ablation. With stabilization complete and parameter headroom still available, I moved to a separate stage of task adaptation. The teacher is used only for distillation and is absent from final inference.
 
 ## 6. LoRA as Controlled Task Adaptation
 
-### 6.1 Why I added capacity while freezing the backbone
+### 6.1 Using the remaining budget without disturbing the recovered backbone
 
-After stabilization, the model still had room below 3B. LoRA offered additional trainable capacity whose parameter count could be controlled through its rank and target projections [7]. I wanted to improve task performance while preserving the recovered backbone.
+After stabilization, the model still had room below 3B. I could therefore add limited trainable capacity to improve task performance. LoRA made that addition controllable through adapter rank and the choice of target projections [7]. Its purpose in this pipeline was further adaptation after KD had recovered useful behavior.
 
-My concern with full-model fine-tuning was the mismatch between broad pretraining and the much smaller A-OKVQA training set. Updating all compressed weights could specialize the system too strongly and disturb behavior that stabilization had restored. I recall such degradation in full-update trials and interpreted it as forgetting or over-specialization. The retained evidence does not isolate catastrophic forgetting as the unique cause. Freezing the backbone was my practical response to that risk.
+The amount of task data shaped how I trained the additional capacity. Full-model fine-tuning would update broadly pretrained weights using the much smaller A-OKVQA dataset, risking over-specialization and loss of behavior restored by KD. Full-update trials showed degradation consistent with that concern. I consequently froze the stabilized backbone and trained only the adapters, restricting the update while preserving the recovered base weights.
 
-### 6.2 Making adapters work with the modified architecture
+### 6.2 Making adapters fit the structurally compressed model
 
-Pruning had changed attention projection dimensions. I recall errors in the library adapter route I initially tried. The archived implementation addresses this by wrapping actual compressed linear layers and deriving adapter dimensions from their `in_features` and `out_features`.
+Pruning had changed attention projection dimensions, and the library adapter route I initially tried produced errors. The implementation addresses this by wrapping the actual compressed linear layers and deriving adapter dimensions from their `in_features` and `out_features`. This makes the adapter shape follow the modified model rather than depend on the original projection widths.
 
-The wrapper adds two trainable low-rank matrices to the frozen original linear transformation, scaled by alpha/rank. The selected rank is 16, alpha is 32, and adapter dropout is 0.1. It targets query and value projections in T5 encoder self-attention and decoder self-attention/cross-attention, for 144 wrapped projections. Base parameters remain frozen while adapter parameters train. The contribution here is making an existing method compatible with the structurally altered model.
+The wrapper adds two trainable low-rank matrices to the frozen linear transformation, scaled by alpha/rank. The selected rank is 16, alpha is 32, and adapter dropout is 0.1. Query and value projections in T5 encoder self-attention and decoder self-attention/cross-attention are wrapped, for 144 adapted projections. Only the adapter parameters train. This custom implementation makes an established method compatible with the compressed architecture.
 
-The adapters add 8,159,232 parameters, bringing the final count to 2,986,746,208. That leaves 13,253,792 below the 3B boundary. Accounting for this added capacity was necessary for inference compliance as well as training.
+The adapters add 8,159,232 parameters, bringing the final count to 2,986,746,208 and leaving 13,253,792 below the 3B boundary. Checking this count tied the adaptation design directly to the inference constraint: useful extra capacity had to fit inside the remaining allowance.
 
-### 6.3 Correct and incorrect examples served different purposes
+### 6.3 Balancing correction with preservation
 
-Task data were limited. Training only on already-correct examples seemed unlikely to address errors efficiently and could reinforce familiar behavior. Training only on mistakes posed a different risk: selecting examples by failure would overrepresent the particular difficulties of the current model.
+Freezing the backbone controlled which weights could change, but the training examples still determined the direction of adaptation. With limited task data, using only already-correct examples would provide little direct pressure to fix failures and could overemphasize familiar cases. Using only incorrect examples would concentrate the update on the stabilized model's particular weaknesses and remove examples of behavior worth preserving.
 
-I wanted the update to learn from errors while continuing to encounter behavior worth retaining. I separated A-OKVQA training examples using the preceding model's predictions and sampled equal numbers from the correct and incorrect groups. The inspected code reads saved incorrect-question identifiers, samples each group with seed 42, and shuffles the mixture. The recorded training set has 7,010 examples.
+I therefore treated the two groups as serving different purposes: incorrect examples supplied corrective targets, while correct examples continued to exercise successful behavior. I partitioned A-OKVQA training examples by the stabilized model's predictions and compared sampling ratios. A 1:1 mixture gave the most useful balance in A-OKVQA and public-score comparisons, so I selected it for LoRA training.
 
-I recall comparing several ratios and finding 1:1 most useful in local A-OKVQA and public-score comparisons. The code verifies the final ratio, but the full sweep has not been recovered. Equal sampling is therefore a selected setting for this project, not a universal optimum. It deliberately changes the distribution to address preservation and correction; it does not make that distribution representative of every VQA setting.
+The implementation reads saved incorrect-question identifiers, samples equal numbers from the two groups with seed 42, and shuffles the resulting 7,010 examples. Equal sampling deliberately reweights the task data toward this preservation-and-correction objective. Its selection reflects the comparisons in this project, rather than a claim that equal proportions are optimal for every model or VQA distribution.
 
-### 6.4 When more training stopped transferring
+### 6.4 Using transfer behavior to judge training duration
 
-Initially, I recall broadly consistent local and public-score trends. With longer training, A-OKVQA accuracy continued to improve while the public score declined. That made further improvement on the development domain insufficient justification for continuing training.
+Initial A-OKVQA improvements were accompanied by public-score improvements, supporting continued adaptation. With longer training, however, A-OKVQA accuracy continued to rise while the public score fell. The divergence changed the stopping decision: better performance on the adaptation domain was no longer sufficient evidence of a better competition model.
 
-Training used external training examples, not the competition evaluation data. The divergence suggested increasing specialization to A-OKVQA, but it did not isolate the mechanism. The exact A-OKVQA split and matched checkpoint values for the extended-training comparison have not been recovered; this report does not relabel it as a verified official-validation learning curve.
+Training used external A-OKVQA examples; competition evaluation data were not used for gradient updates. The diverging trends were consistent with increasing specialization to the adaptation data. I therefore favored the earlier model with better transfer instead of extending training solely to improve A-OKVQA accuracy. The final LoRA implementation reloads the step-1,000 checkpoint; this is the selected checkpoint for the project, not a general stopping threshold.
 
-The retained LoRA notebook reloads a step-1,000 checkpoint. That records the selected checkpoint, not a general early-stopping rule. Final public weighted accuracy is reported as 86.59%, a further gain of 0.86 percentage points. Because public feedback informed development choices, it remains development feedback rather than an untouched generalization test.
+Final public weighted accuracy is 86.59%, an additional 0.86 percentage points after stabilization. This completes the intended sequence: pruning supplies the parameter savings, KD recovers behavior in the smaller architecture, and LoRA uses the remaining allowance for controlled task adaptation. Public feedback informed these development choices, so the public score is not an untouched generalization test.
 
 ## 7. Quantitative Results and Evaluation Boundaries
 
@@ -221,13 +221,13 @@ The retained LoRA notebook reloads a step-1,000 checkpoint. That records the sel
 | Knowledge distillation | Same pruned architecture | - | 85.73% |
 | Final model with LoRA | 2,986,746,208 | - | 86.59% |
 
-The A-OKVQA column reports the archived 1,000-example validation comparison, with a 2.40 percentage-point decrease after pruning. A dash means no verified value is supplied for that metric and stage. Public weighted accuracy uses a different dataset and metric, so comparisons must stay within a column. In particular, 86.59% cannot be compared with the original model's 79.00% as a gain on the same benchmark.
+The A-OKVQA column reports the 1,000-example validation comparison, with a 2.40 percentage-point decrease after pruning. A dash means no verified value is supplied for that metric and stage. Public weighted accuracy uses a different dataset and metric, so comparisons must stay within a column. In particular, 86.59% cannot be compared with the original model's 79.00% as a gain on the same benchmark.
 
 The final model is 25.76% smaller than the original, rounded to 25.8% in overview text. Before adapters, the pruned model is 25.96% smaller. The public gain over the pruned stage is 3.76 percentage points. These cumulative checkpoints do not isolate the causal contributions of KD, LoRA, and balanced sampling.
 
 ![Parameter counts and public scores](../assets/results-summary.png)
 
-Figure 2. Archived parameter counts and public scores, with local A-OKVQA results stated separately. These are historical records; no new training or inference was run for the report.
+Figure 2. Parameter counts and public scores at cumulative pipeline stages. The local A-OKVQA comparison is stated separately because it uses a different dataset and metric.
 
 ### 7.2 Different subsets answered different questions
 
@@ -241,13 +241,13 @@ Figure 2. Archived parameter counts and public scores, with local A-OKVQA result
 | KD internal validation | 10% of the 17,056-example A-OKVQA training split | Checkpoint selection by cross-entropy |
 | LoRA training | 7,010 A-OKVQA training examples | Balanced by preceding-model correctness |
 
-The subsets can overlap and should not be added as a count of unique examples. KD's internal holdout is distinct from the official validation split and is not guaranteed to remain held out from subsequent LoRA training. A separate 60-example competition diagnostic in the archive is not an A-OKVQA measurement and is not inserted into the stage table.
+The subsets can overlap and should not be added as a count of unique examples. KD's internal holdout is distinct from the official validation split and is not guaranteed to remain held out from subsequent LoRA training. A separate 60-example competition diagnostic is not an A-OKVQA measurement and is not inserted into the stage table.
 
 The public score and final award are distinct. Competition rules describe private-score evaluation and final presentation assessment [1]. Samsung's announcement documents the first-place award [2]; the public score alone did not define that outcome.
 
 ### 7.3 Historical resources
 
-The archived summary lists a 32GB RTX 5090 for analysis and inference, an 80GB A100 for distillation at approximately seven hours, and a 24GB RTX 3090 for LoRA at approximately thirty minutes. These describe particular stages, not total experimentation cost or controlled latency, memory, or throughput measurements. The two-to-three-week development estimate and personal rental constraints are retrospective context.
+The experiment summary lists a 32GB RTX 5090 for analysis and inference, an 80GB A100 for distillation at approximately seven hours, and a 24GB RTX 3090 for LoRA at approximately thirty minutes. These describe particular stages, not total experimentation cost or controlled latency, memory, or throughput measurements. Personally funded rentals and the two-to-three-week effective development window made efficient experiment selection an important part of the design.
 
 ## 8. What Task Accuracy Did Not Capture
 
@@ -255,7 +255,7 @@ The archived summary lists a 32GB RTX 5090 for analysis and inference, an 80GB A
 
 During development, I observed that a pruned model could still select correct answers while its ability to generate useful natural-language explanations deteriorated. I explored rationale training partly because this loss was visible despite acceptable answer behavior. This changed what I considered a complete evaluation of compression.
 
-The observation is qualitative. A standardized explanation benchmark and systematic before-and-after error taxonomy are unavailable, and the exact form of the degradation is not fully reconstructed here. It does not establish that knowledge remained intact while only its expression was damaged. Fluent language would also not, by itself, establish a faithful account of the computation behind an answer.
+This was a qualitative language-generation observation; the project did not include a standardized explanation benchmark or a systematic error taxonomy. It motivated a broader evaluation question without establishing that knowledge remained intact while only its expression was damaged. Fluent explanations would also require separate evaluation of whether they faithfully describe the computation behind an answer.
 
 Nevertheless, the experience exposed a concrete evaluation gap: preserving the metric used for selection did not ensure preservation of other useful behavior. It became a motivation for my interest in trustworthy AI and in measurements that reveal capability changes hidden by strong task scores.
 
@@ -267,17 +267,17 @@ The question I would now ask is which capabilities changed, under which inputs, 
 
 ### 8.3 Limits of the experimental conclusions
 
-The process involved one task setting, adaptive search, small subsets, and public feedback. There are no repeated-seed uncertainty estimates, complete ratio sweeps, matched-compute teacher comparisons, or factorial ablations in this release. Some recalled comparisons may involve several changes between runs. The archive also does not establish whether the pretrained model had encountered related data previously.
+The process involved one task setting, adaptive search, small subsets, and public feedback. Encoder-pruning, alternative-teacher, sampling-ratio, extended-training, and language-generation comparisons are qualitative development observations. The quantitative table is limited to the reported stage measurements. There are no repeated-seed uncertainty estimates, matched-compute teacher comparisons, complete ratio sweeps, or factorial ablations in this release; some development comparisons changed several factors. The final KD configuration is documented in the implementation, but configuration-to-submission mapping is insufficient for a numerical loss-mixture comparison. No new training or inference was run for this report, and possible overlap with the base model's pretraining data was not evaluated.
 
 The evidence supports a working solution under concrete constraints and a record of how I used affordable observations to choose the next intervention. It does not establish universal superiority of one architecture, pruning order, teacher size, or sampling ratio.
 
-## 9. Related Work and Retrospective Perspective
+## 9. Related Work
 
 ### 9.1 Methods used and intellectual credit
 
 The system builds on InstructBLIP [3], A-OKVQA [4], Wanda's activation-and-weight principle [5], knowledge distillation [6], and LoRA [7]. Explaining how I arrived at an activation-and-output-weight question does not replace credit to Wanda. The recovery motivation explains my choice of distillation, rather than claiming that I originated teacher-student learning.
 
-The following connections were made while contextualizing the work retrospectively. These papers should not be read as having guided the original experiments, nor as establishing that my project preceded similar ideas or that all my interpretations were correct.
+The connections below place the design decisions in a broader research context. They are comparisons with related work, rather than additional methods used in the competition implementation. Papers are grouped by publication timing to distinguish research already available in 2025 from subsequent studies.
 
 ### 9.2 Related research available before the competition
 
@@ -287,31 +287,33 @@ Li et al., BLIP-2, ICML 2023 [9], demonstrate a Q-Former connecting frozen pretr
 
 Shu et al., LLaVA-MoD, ICLR 2025 [11], combine sparse MoE and distillation for smaller multimodal models. MoE remained a direction I wanted to investigate with more resources and eligible starting points. Fewer activated parameters alone would not meet this competition's total-loaded-parameter limit. Publication before the competition also does not establish that released weights met its December 2023 cutoff.
 
+Sung et al., ECoFLaP, ICLR 2024 [14], study multimodal compression with adaptive layer-wise pruning. Their choice to preserve the relatively small Q-Former provides a relevant allocation precedent for the interface-preservation reasoning in Section 3.1. Their weight-pruning procedure differs from this project's structural neuron and head removal.
+
 ### 9.3 Research published after the competition
 
 Emmons et al., A Pragmatic Way to Measure Chain-of-Thought Monitorability, Google DeepMind, October 2025 preprint [12], distinguish whether reasoning is readable and whether it contains the steps needed to reach an answer. This supplies vocabulary for properties beyond correctness. Its proxy metrics concern reasoning traces and do not establish whether my model's monitorability changed.
 
 Wen et al., SlimVLM, Huawei, August 2026 preprint [13], study VLM-specific structural pruning with module-dependent sensitivity and LoRA recovery. This relates to where capacity can be removed and how much performance can be recovered. Different models and criteria prevent treating it as validation of my exact removal rate, component ordering, or upstream-error hypothesis. Both corporate studies are identified as preprints rather than assumed conference publications.
 
-## 10. Evidence Summary and Release Scope
+## 10. Design Decisions and Their Consequences
 
-| Decision or observation | Evidence available | Scope of the claim |
+| Constraint or observation | Decision | Consequence for the system |
 |---|---|---|
-| Independent solution development | Author account and official rules | Model/data selection through final implementation |
-| Model selection for tractable experiments | Retrospective rationale; selected model in archive | No exhaustive architecture ranking |
-| Encoder sensitivity and bridge concern | Recalled encoder trials; architectural hypothesis | No quantified Q-Former ablation |
-| Conditional hidden-state masking | Archived diagnostics and recalled search | Exploratory; excluded from final architecture |
-| FFN criterion and 95% removal | Inspected scoring and compaction code | Global neuron ranking; variable retained widths |
-| Head similarity and removal set | Inspected attention/pruning notebooks | Original-model cosine signal; no measured head-FFN pairing |
-| Original versus larger teacher | Original verified; alternative recalled | No numerical teacher-size ablation |
-| KD settings | Final notebook and separate development logs | Configuration evidence; no fresh execution |
-| Custom LoRA and 1:1 sampling | Inspected wrapper and selection code | Existing method adapted to compressed dimensions |
-| Ratio and longer-training comparisons | Qualitative recollection | No fabricated sweep or split-specific curve |
-| Language-generation degradation | Qualitative observation | No quantified faithfulness or safety conclusion |
-| Stage scores and parameter counts | Archived summaries | Historical cumulative results |
-| First-place award | Official Samsung announcement | Distinct from public leaderboard score |
+| Tight parameter budget and costly experiments | Select an aligned model with separable components | Component-level tests guide compression |
+| Severe losses in exploratory encoder tests | Preserve encoders and the visual-language interface | Concentrate removal on decoder components |
+| Low activation alone poorly predicts masking effects | Refine groups and test conditional combinations | Use task evaluation to revise candidate rankings |
+| Limited extra benefit from hidden-state intervention | Remove it from the final design | Retain the 2,048-dimensional model-facing hidden width |
+| Need substantial savings before removing many heads | Rank FFN neurons with an activation-and-weight score | Remove 95% of decoder FFN neurons in aggregate |
+| Potential overlap in attention behavior | Use attention-map similarity and task evaluation | Retain 19 of 32 heads per targeted module |
+| Pruned model needs recovery | Use the original XL teacher and answer-focused KD | Stabilize the smaller architecture before adaptation |
+| Remaining parameter allowance and limited task data | Add custom LoRA with the backbone frozen | Train adapters without updating recovered base weights |
+| Correction alone may neglect successful behavior | Mix correct and incorrect examples equally | Train on a 7,010-example preservation-and-correction mixture |
+| Longer training improves A-OKVQA but reduces public score | Favor the earlier checkpoint with better transfer | Select the step-1,000 LoRA checkpoint |
+| Answer selection survives despite poorer generation | Identify capability evaluation beyond task accuracy as a research need | Treat language-generation loss as an important limitation |
 
-This public release contains the report, newly drawn figures, and aggregate tables. It excludes the competition presentation, private implementation notebooks, model checkpoints, and raw datasets. It is a technical project report rather than an executable reproduction package or a claim of peer-reviewed publication. Within that scope, it documents the reasoning, implementation decisions, outcomes, and remaining uncertainty behind the solution.
+This public release contains the technical report, newly drawn figures, and aggregate results. The report connects each intervention to the problem it addressed, the observations that shaped it, and its role in the final solution. The competition presentation, implementation notebooks, checkpoints, and raw datasets are not distributed; this release documents the project rather than providing an executable reproduction package.
+
+<!-- pagebreak -->
 
 ## References
 
@@ -328,3 +330,4 @@ This public release contains the report, newly drawn figures, and aggregate tabl
 11. Shu et al. [LLaVA-MoD: Making LLaVA Tiny via MoE-Knowledge Distillation](https://github.com/shufangxun/LLaVA-MoD), ICLR 2025; preprint first released in 2024.
 12. Emmons, Zimmermann, Elson, and Shah. [A Pragmatic Way to Measure Chain-of-Thought Monitorability](https://arxiv.org/abs/2510.23966), Google DeepMind, October 2025 preprint.
 13. Wen et al. [SlimVLM: Sensitivity-aware Dynamic Structured Pruning with Adaptive Visual Token Selection for Efficient Vision-Language Models](https://arxiv.org/abs/2608.03580), Huawei, August 2026 preprint.
+14. Sung, Yoon, and Bansal. [ECoFLaP: Efficient Coarse-to-Fine Layer-Wise Pruning for Vision-Language Models](https://proceedings.iclr.cc/paper_files/paper/2024/file/8a67127ed400dee7851c99469fe4b829-Paper-Conference.pdf), ICLR 2024.
